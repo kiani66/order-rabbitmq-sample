@@ -9,4 +9,8 @@ public static class ProcessedMessageStore
 
     public static void MarkAsProcessed(Guid orderId)
         => _processedOrders.Add(orderId);
+
+    public static void Reset()
+      =>  _processedOrders.Clear();
 }
+

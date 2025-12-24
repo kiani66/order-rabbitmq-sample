@@ -25,16 +25,24 @@ public class RabbitMqConsumer : IEventConsumer
         var consumer = new AsyncEventingBasicConsumer(channel);
         consumer.ReceivedAsync += async (_, ea) =>
         {
-            await HandleMessageAsync(channel, ea);
+            if (cancellationToken.IsCancellationRequested)
+            {
+                await channel.BasicRejectAsync(ea.DeliveryTag, requeue: true);
+                return;
+            }
+            await HandleMessageAsync(channel, ea, cancellationToken);
         };
 
-        await channel.BasicConsumeAsync(
-            queue: "orders",
-            autoAck: false,
-            consumer: consumer
-        );
+        await channel.BasicConsumeAsync(queue: "orders", autoAck: false, consumer: consumer);
 
-        await Task.Delay(Timeout.Infinite, cancellationToken);
+        try
+        {
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            Console.WriteLine("🛑 Worker is shutting down gracefully...");
+        }
     }
     //Infrastructure / Startup
     private static void DeclareQueues(IChannel channel)
@@ -62,13 +70,13 @@ public class RabbitMqConsumer : IEventConsumer
         ).GetAwaiter().GetResult();
     }
     //  Message orchestration
-    private async Task HandleMessageAsync(IChannel channel, BasicDeliverEventArgs ea)
+    private async Task HandleMessageAsync(IChannel channel, BasicDeliverEventArgs ea, CancellationToken cancellationToken)
     {
         try
         {
             var evt = DeserializeMessage(ea.Body.ToArray());
 
-            await ProcessMessageAsync(evt);
+            await ProcessMessageAsync(evt, cancellationToken);
 
             await channel.BasicAckAsync(ea.DeliveryTag, false);
         }
@@ -78,7 +86,7 @@ public class RabbitMqConsumer : IEventConsumer
         }
     }
     //  Business logic
-    private async Task ProcessMessageAsync(OrderCreatedEvent evt)
+    private async Task ProcessMessageAsync(OrderCreatedEvent evt, CancellationToken cancellationToken)
     {
         if (ProcessedMessageStore.IsProcessed(evt.OrderId))
         {
@@ -92,7 +100,7 @@ public class RabbitMqConsumer : IEventConsumer
         if (evt.Amount == 1000)
             throw new Exception("Simulated processing failure");
 
-        await Task.Delay(1000);
+        await Task.Delay(1000, cancellationToken);
         ProcessedMessageStore.MarkAsProcessed(evt.OrderId);
     }
     //  Serialization
